@@ -10,6 +10,9 @@
 </a>
 </p>
 
+# Looking for new maintainers!
+
+Please see https://github.com/Issafalcon/neotest-dotnet/discussions/142 for more details and background behind this move.
 
 # Neotest .NET
 
