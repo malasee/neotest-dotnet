@@ -1,4 +1,5 @@
 local logger = require("neotest.logging")
+local async = require("neotest.async")
 local lib = require("neotest.lib")
 local DotnetUtils = require("neotest-dotnet.utils.dotnet-utils")
 local BuildSpecUtils = require("neotest-dotnet.utils.build-spec-utils")
@@ -281,6 +282,7 @@ M.generate_test_results = function(output_file_path, tree, context_id)
   logger.debug(intermediate_results)
 
   local neotest_results = {}
+  local output_chunks_by_node = {}
 
   for _, intermediate_result in ipairs(intermediate_results) do
     for _, node in ipairs(test_nodes) do
@@ -299,6 +301,46 @@ M.generate_test_results = function(output_file_path, tree, context_id)
             short = node_data.full_name .. ":" .. intermediate_result.status,
             errors = {},
           }
+
+        -- Buffer output lines for this node to decide later whether to include only failures
+        if
+          (intermediate_result.raw_output and intermediate_result.raw_output ~= "")
+          or (intermediate_result.error_info and intermediate_result.error_info ~= "")
+        then
+          local lines = {}
+          local header_name = intermediate_result.test_name
+            or intermediate_result.qualified_test_name
+            or node_data.full_name
+          if header_name and header_name ~= "" then
+            local BLUE = "\27[34m"
+            local RESET = "\27[0m"
+            local base, params = string.match(header_name, "^(.-)%((.*)%)$")
+            if base and params then
+              table.insert(lines, BLUE .. base .. RESET)
+              table.insert(lines, BLUE .. "\t(" .. params .. ")" .. RESET)
+            else
+              table.insert(lines, BLUE .. header_name .. RESET)
+            end
+            table.insert(lines, "")
+          end
+          if intermediate_result.error_info and intermediate_result.error_info ~= "" then
+            for _, l in ipairs(vim.split(intermediate_result.error_info, "\n")) do
+              table.insert(lines, l)
+            end
+            table.insert(lines, "")
+          end
+          if intermediate_result.raw_output and intermediate_result.raw_output ~= "" then
+            for _, l in ipairs(vim.split(intermediate_result.raw_output, "\n")) do
+              table.insert(lines, l)
+            end
+          end
+
+          output_chunks_by_node[node_data.id] = output_chunks_by_node[node_data.id] or {}
+          table.insert(output_chunks_by_node[node_data.id], {
+            lines = lines,
+            status = intermediate_result.status,
+          })
+        end
 
         if intermediate_result.status == "failed" then
           -- Mark as failed for the whole thing
@@ -322,6 +364,45 @@ M.generate_test_results = function(output_file_path, tree, context_id)
 
   logger.debug("neotest-dotnet: xUnit Neotest Results after conversion of Intermediate Results: ")
   logger.debug(neotest_results)
+
+  -- After collecting all chunks, write selected output per node:
+  for node_id, chunks in pairs(output_chunks_by_node) do
+    local has_failure = false
+    for _, c in ipairs(chunks) do
+      if c.status == "failed" then
+        has_failure = true
+        break
+      end
+    end
+
+    local selected = {}
+    if has_failure then
+      for _, c in ipairs(chunks) do
+        if c.status == "failed" then
+          table.insert(selected, c)
+        end
+      end
+    else
+      selected = chunks
+    end
+
+    if #selected > 0 then
+      local tmp_output_path = async.fn.tempname()
+      local initial_lines = { "Test Output: " }
+      for _, c in ipairs(selected) do
+        table.insert(initial_lines, "")
+        for _, l in ipairs(c.lines) do
+          table.insert(initial_lines, l)
+        end
+      end
+      local ok = pcall(async.fn.writefile, initial_lines, tmp_output_path)
+      if ok then
+        neotest_results[node_id] = neotest_results[node_id]
+          or { status = "passed", short = "", errors = {} }
+        neotest_results[node_id].output = tmp_output_path
+      end
+    end
+  end
 
   return neotest_results
 end
