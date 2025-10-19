@@ -66,7 +66,7 @@ function DotNetUtils.get_test_full_names(project_path)
 
   local test_command = "dotnet test -t " .. project_path .. " -- NUnit.DisplayName=FullName"
   local success, job = pcall(nio.fn.jobstart, test_command, {
-    pty = true,
+    pty = false,
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
         if test_names_started then
