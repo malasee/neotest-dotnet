@@ -28,6 +28,26 @@ local get_node_type = function(captured_nodes)
   end
 end
 
+-- Truncation helpers for names ending with '...', '…', or '···'
+local function has_truncation_marker(s)
+  if not s or s == "" then
+    return false
+  end
+  return string.match(s, "%.%.%.$") ~= nil
+    or string.match(s, "…$") ~= nil
+    or string.match(s, "···$") ~= nil
+end
+
+local function strip_truncation_marker(s)
+  if not s or s == "" then
+    return s
+  end
+  s = string.gsub(s, "%s*%.%.%.$", "")
+  s = string.gsub(s, "%s*…$", "")
+  s = string.gsub(s, "%s*···$", "")
+  return s
+end
+
 M.build_position = function(file_path, source, captured_nodes)
   local match_type = get_node_type(captured_nodes)
 
@@ -102,6 +122,56 @@ M.post_process_tree_list = function(tree, path)
   local short_name_pat = "%.([%w_]+)$"
   local short_name_only_pat = "%.([%w_]+)%(.*%)$"
   local short_name_with_param_pat = "%.([%w_]+%(.*%))$"
+  -- Accept truncated outputs that end with ASCII '...', Unicode ellipsis '…', or middle dots '···'
+  local short_name_with_param_ellipsis_pat = "%.([%w_]+%([^)]*%.%.%.)$"
+  local short_name_with_param_unicode_ellipsis_pat = "%.([%w_]+%([^)]*…)$"
+  local short_name_with_param_middle_dot_pat = "%.([%w_]+%([^)]*···)$"
+
+  local function match_method_with_params(full)
+    return string.match(full, short_name_with_param_pat)
+      or string.match(full, short_name_with_param_ellipsis_pat)
+      or string.match(full, short_name_with_param_unicode_ellipsis_pat)
+      or string.match(full, short_name_with_param_middle_dot_pat)
+  end
+
+  -- Helper: extract the segment after the last '.' including any '(' parameters, even if truncated
+  local function extract_method_segment(full)
+    if not full or full == "" then
+      return full
+    end
+    -- Find last '.' before the first '('
+    local open_idx = string.find(full, "%(")
+    local scan_limit = open_idx and (open_idx - 1) or #full
+    local last_dot
+    for i = 1, scan_limit do
+      if string.sub(full, i, i) == "." then
+        last_dot = i
+      end
+    end
+    if last_dot then
+      return string.sub(full, last_dot + 1)
+    end
+    return full
+  end
+
+  -- Helper: extract the method name only (without parameters), resilient to truncation
+  local function extract_method_name_without_params(full)
+    if not full or full == "" then
+      return full
+    end
+    local open_idx = string.find(full, "%(")
+    local scan_limit = open_idx and (open_idx - 1) or #full
+    local last_dot
+    for i = 1, scan_limit do
+      if string.sub(full, i, i) == "." then
+        last_dot = i
+      end
+    end
+    if last_dot then
+      return string.sub(full, last_dot + 1, scan_limit)
+    end
+    return string.sub(full, 1, scan_limit)
+  end
 
   local function process_test_names(node_tree)
     for _, node in ipairs(node_tree) do
@@ -132,7 +202,9 @@ M.post_process_tree_list = function(tree, path)
           for j, matched_name in ipairs(matched_tests) do
             local sub_id = path .. "::" .. string.gsub(matched_name, "%.", "::")
             local sub_test = {}
-            local short_name = string.match(matched_name, short_name_with_param_pat)
+            -- Prefer regex extraction; fallback keeps parameters even if truncated
+            local short_name = match_method_with_params(matched_name)
+              or extract_method_segment(matched_name)
             local sub_node = {
               id = sub_id,
               is_class = false,
@@ -152,7 +224,8 @@ M.post_process_tree_list = function(tree, path)
             table.insert(node_tree, sub_test)
           end
 
-          local short_name = string.match(matched_tests[1], short_name_only_pat)
+          -- Extract base method name without parameters (works even if params are truncated)
+          local short_name = extract_method_name_without_params(matched_tests[1])
           node_tree[1] = vim.tbl_extend("force", node, {
             name = short_name,
             framework = "xunit",
@@ -304,7 +377,22 @@ M.generate_test_results = function(output_file_path, tree, context_id)
       if name_has_params then
         if
           intermediate_result.test_name == node_data.full_name
-          or string.find(intermediate_result.test_name, node_data.full_name, 0, true)
+          or (node_data.full_name and string.find(
+            intermediate_result.test_name,
+            node_data.full_name,
+            0,
+            true
+          ))
+          or (
+            node_data.full_name
+            and has_truncation_marker(node_data.full_name)
+            and string.find(
+              intermediate_result.test_name,
+              strip_truncation_marker(node_data.full_name),
+              0,
+              true
+            )
+          )
         then
           is_match = true
         end
@@ -314,7 +402,19 @@ M.generate_test_results = function(output_file_path, tree, context_id)
           is_match = true
         elseif
           allow_substring_match
-          and string.find(intermediate_result.test_name, node_data.full_name, 0, true)
+          and node_data.full_name
+          and (
+            string.find(intermediate_result.test_name, node_data.full_name, 0, true)
+            or (
+              has_truncation_marker(node_data.full_name)
+              and string.find(
+                intermediate_result.test_name,
+                strip_truncation_marker(node_data.full_name),
+                0,
+                true
+              )
+            )
+          )
         then
           is_match = true
         elseif
