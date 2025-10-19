@@ -288,11 +288,45 @@ M.generate_test_results = function(output_file_path, tree, context_id)
     for _, node in ipairs(test_nodes) do
       local node_data = node:data()
 
-      if
-        intermediate_result.test_name == node_data.full_name
-        or string.find(intermediate_result.test_name, node_data.full_name, 0, true)
-        or intermediate_result.qualified_test_name == BuildSpecUtils.build_test_fqn(node_data.id)
-      then
+      -- Detect whether this node is a parameterized child (e.g., name contains "(")
+      local name_has_params = node_data.full_name
+        and string.find(node_data.full_name, "%(.*%)") ~= nil
+      local has_children = #node:children() > 0
+
+      -- Only allow substring/FQN matching for non-parameterized, leaf tests.
+      -- This prevents a single failing subtest from marking all siblings failed.
+      local allow_substring_match = not has_children and not name_has_params
+      local allow_fqn_match = not has_children and not name_has_params
+
+      local is_match = false
+
+      -- Prefer exact/contained name match for parameterized subtests
+      if name_has_params then
+        if
+          intermediate_result.test_name == node_data.full_name
+          or string.find(intermediate_result.test_name, node_data.full_name, 0, true)
+        then
+          is_match = true
+        end
+      else
+        -- Non-parameterized test nodes
+        if intermediate_result.test_name == node_data.full_name then
+          is_match = true
+        elseif
+          allow_substring_match
+          and string.find(intermediate_result.test_name, node_data.full_name, 0, true)
+        then
+          is_match = true
+        elseif
+          allow_fqn_match
+          and intermediate_result.qualified_test_name
+            == BuildSpecUtils.build_test_fqn(node_data.id)
+        then
+          is_match = true
+        end
+      end
+
+      if is_match then
         -- For non-inlined parameterized tests, check if we already have an entry for the test.
         -- If so, we need to check for a failure, and ensure the entire group of tests is marked as failed.
         neotest_results[node_data.id] = neotest_results[node_data.id]
