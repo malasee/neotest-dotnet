@@ -189,9 +189,20 @@ M.post_process_tree_list = function(tree, path)
 
         logger.debug("neotest-dotnet: Processing test name: " .. node_test_name)
 
+        -- Avoid suffix collisions (e.g., Test1 vs Test1Suffix) by requiring
+        -- an exact method segment match at the end of the name, and ensuring
+        -- the class qualifier matches as well.
+        local method_name = node.display_name or node.name
+        local qualified_from_id = NodeTreeUtils.get_qualified_test_name_from_id(node.id)
+        local class_qualifier = string.gsub(qualified_from_id, "%..-$", "")
+
         for _, dotnet_name in ipairs(dotnet_tests) do
-          -- First remove parameters from test name so we just match the "base" test name
-          if string.find(dotnet_name:gsub("%b()", ""), node_test_name, 0, true) then
+          local bare = dotnet_name:gsub("%b()", "")
+          local ends_with_method = string.match(bare, "%." .. method_name .. "$") ~= nil
+          local class_matches = class_qualifier == ""
+            or string.find(bare, class_qualifier, 1, true) ~= nil
+
+          if ends_with_method and class_matches then
             table.insert(matched_tests, dotnet_name)
           end
         end
