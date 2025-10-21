@@ -409,31 +409,36 @@ M.generate_test_results = function(output_file_path, tree, context_id)
         end
       else
         -- Non-parameterized test nodes
-        if intermediate_result.test_name == node_data.full_name then
-          is_match = true
-        elseif
-          allow_substring_match
-          and node_data.full_name
-          and (
-            string.find(intermediate_result.test_name, node_data.full_name, 0, true)
-            or (
-              has_truncation_marker(node_data.full_name)
-              and string.find(
-                intermediate_result.test_name,
-                strip_truncation_marker(node_data.full_name),
-                0,
-                true
-              )
-            )
-          )
+        -- Prefer fully-qualified name (FQN) matches to avoid cross-class collisions
+        local node_fqn = BuildSpecUtils.build_test_fqn(node_data.id)
+
+        if
+          (
+            intermediate_result.qualified_test_name
+            and intermediate_result.qualified_test_name == node_fqn
+          ) or intermediate_result.test_name == node_fqn
         then
           is_match = true
-        elseif
-          allow_fqn_match
-          and intermediate_result.qualified_test_name
-            == BuildSpecUtils.build_test_fqn(node_data.id)
-        then
+        elseif intermediate_result.test_name == node_data.full_name then
+          -- Exact short-name equality (rarely used in xUnit TRX but keep for completeness)
           is_match = true
+        else
+          -- Fall back to strict method-at-end matching with class qualifier to avoid
+          -- collisions like Foo.Bar_Test and Foo.Bar_Test_Nested
+          local method_name = node_data.display_name or node_data.name
+          local qualified_from_id = NodeTreeUtils.get_qualified_test_name_from_id(node_data.id)
+          local class_qualifier = string.gsub(qualified_from_id, "%..-$", "")
+
+          local bare = intermediate_result.test_name
+              and intermediate_result.test_name:gsub("%b()", "")
+            or nil
+          local ends_with_method = bare and string.match(bare, "%." .. method_name .. "$") ~= nil
+          local class_matches = class_qualifier == ""
+            or (bare and string.find(bare, class_qualifier, 1, true) ~= nil)
+
+          if ends_with_method and class_matches then
+            is_match = true
+          end
         end
       end
 
