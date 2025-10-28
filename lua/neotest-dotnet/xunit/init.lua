@@ -174,7 +174,11 @@ M.post_process_tree_list = function(tree, path)
   end
 
   local function process_test_names(node_tree)
-    for _, node in ipairs(node_tree) do
+    -- Iterate over a stable snapshot of the current list length so that
+    -- appending new parameterized children does not affect iteration.
+    local original_len = #node_tree
+    for idx = 1, original_len do
+      local node = node_tree[idx]
       if node.type == "test" then
         local matched_tests = {}
         local node_test_name = node.name
@@ -237,7 +241,7 @@ M.post_process_tree_list = function(tree, path)
 
           -- Extract base method name without parameters (works even if params are truncated)
           local short_name = extract_method_name_without_params(matched_tests[1])
-          node_tree[1] = vim.tbl_extend("force", node, {
+          node_tree[idx] = vim.tbl_extend("force", node, {
             name = short_name,
             framework = "xunit",
             running_id = running_id,
@@ -248,7 +252,7 @@ M.post_process_tree_list = function(tree, path)
         elseif #matched_tests == 1 then
           logger.debug("testing: matched one test with name: " .. matched_tests[1])
           local short_name = string.match(matched_tests[1], short_name_pat)
-          node_tree[1] = vim.tbl_extend(
+          node_tree[idx] = vim.tbl_extend(
             "force",
             node,
             { name = short_name, framework = "xunit", running_id = running_id }
